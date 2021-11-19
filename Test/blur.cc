@@ -1,9 +1,15 @@
 #include <arm_neon.h>
 #include <iostream>
+#include <vector>
+#include <random>
+#include <functional>
+#include <complex>
 
-typedef unsigned char uint8_t;
+#include "Test/time.h"
 
-void BlurRef(const std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, int width, int kernel_size)
+//typedef unsigned char uint8_t;
+
+void BlurRef(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, int width, int kernel_size)
 {
     int   half_k = kernel_size / 2;
     int   count;
@@ -64,15 +70,16 @@ void CreateRandom(std::vector<T> in, D distribution)
 
 int main()
 {
-    std::uniform_int_distribution<int32_t>(low, high);
-
     std::vector<uint8_t> input(H * W);
     std::vector<uint8_t> output(H * W);
 
-    CreateRandom(input, std::uniform_int_distribution<int8_t>(0, 255));
-    CreateRandom(output, std::uniform_int_distribution<int8_t>(0, 255));
+    CreateRandom(input, std::uniform_int_distribution<int32_t>(0, 255));
+    CreateRandom(output, std::uniform_int_distribution<int32_t>(0, 255));
 
+    Tic()
     BlurRef(input, output, H, W, 5);
+
+    std::cout << "blur cost: " << Toc() << std::endl;
 
     return 0;
 }

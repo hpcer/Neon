@@ -17,3 +17,4 @@ include_directories(${INCLUDE_LIST})
 
 add_executable(TestGEMM Test/gemm.cc ${SRC_LIST})
 add_executable(TestBlur Test/blur.cc ${SRC_LIST})
+add_executable(TestNeon Test/neon_intrinsics.cc ${SRC_LIST})

@@ -45,51 +45,51 @@ void BlurRef(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, i
     return;
 }
 
+template<typename T>
+inline T GetRowPtr(T* base, size_t stride, size_t row)
+{
+    char* baseRaw = const_cast<char*>(reinterpret_cast<const char*>(base));
+    return reinterpret_cast<T*>(baseRaw + row * stride);
+}
+
 void BlurNeon5x5(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, int width)
 {
+    size_t srcStride = width;
+    size_t dstStride = width;
+
     uint8_t* uSrc = reinterpret_cast<uint8_t*>(src.data());
     uint8_t* uDst = reinterpret_cast<uint8_t*>(dst.data());
 
-    std::vector<float> row(width);
-    float32_t* rowPtr = reinterpret_cast<float32_t*>(row.data());
+    std::vector<uint8_t> _tmp;
+    _tmp.assign(width + 2, 0);
+    tmp = &_tmp[1];
 
-    float32_t   t0 = 0.0f;
-    float32x4_t tx;
+    uint16x8_t tPrev = vdupq_n_u16(0x0);   // duplicate scalar or vector to vector
+    uint16x8_t tCurr = tPrev;
+    uint16x8_t tNext = tPrev;
+    uint16x8_t t0, t1, t2, t3, t4;
 
-
-    for (int h0 = 0; h0 < 3; ++h0)
+    for (size_t y = 0; y < size.height; ++y)
     {
-        int w0 = 0;
-        for (w0 = 0; w0 < width; w0 += 16)
+        const uint8_t *sRow0, *sRow1;
+        const uint8_t* sRow2 = GetRowPtr(uSrc, srcStride, y);
+        const uint8_t *sRow3, *sRow4;
+
+        uint8_t* dRow = GetRowPtr(uDst, dstStride, y);
+
+        sRow0 = y > 1 ? GetRowPtr(uSrc, srcStirde, y - 2) : tmp;
+        sRow1 = y > 0 ? GetRowPtr(uSrc, srcStride, y - 1) : tmp;
+        sRow3 = y < height - 1 ? GetRowPtr(uSrc, srcStride, y + 1) : tmp;
+        sRow4 = y < height - 2 ? GetRowPtr(uSrc, srcStride, y + 2) : tmp;
+
+        // do vertical convolution
+
+        size_t       x     = 0;
+        const size_t bCols = y + 3 < height ? width : (width - 8);
+        for (; x <= bCols; x += 8)
         {
-            uint8x16_t reg = vld1q_u8(uSrc);
-
-            for (uint8_t k = 0; k < 16; ++k)
-            {
-                t0 += reg[k];
-                tx[k & 3] = t0;
-
-                if (((k & 3) == 0) && (k != 0))
-                {
-                    float32x4_t tmp = vld1q_f32(rowPtr);
-                    tx              = vaddq_f32(tmp, tx);
-                    vst1q_f32(rowPtr, tx);
-                    rowPtr += 4;
-                }
-            }
+            uint8x8_t x0 = vld1_u8(sRow0 + x);
         }
-    }
-
-    rowPtr = reinterpret_cast<float32_t*>(row.data());
-
-    float32x4_t scale = vmovq_n_f32(12.0f);
-
-    for(int w0 = 0; w0 < width; ++w0)
-    {
-        float32x4_t tmp = vld1q_f32(rowPtr);
-        tmp = vdivq_f32(tmp, scale);
-        vst1q_f32()
-
     }
 }
 

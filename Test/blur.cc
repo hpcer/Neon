@@ -46,10 +46,24 @@ void BlurRef(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, i
 }
 
 template<typename T>
-inline T GetRowPtr(T* base, size_t stride, size_t row)
+inline T* GetRowPtr(T* base, size_t stride, size_t row)
 {
     char* baseRaw = const_cast<char*>(reinterpret_cast<const char*>(base));
     return reinterpret_cast<T*>(baseRaw + row * stride);
+}
+
+inline ptrdiff_t borderInterpolate(ptrdiff_t _p, size_t _len, size_t startMargin = 0, size_t endMargin = 0)
+{
+    ptrdiff_t p = _p + (ptrdiff_t)startMargin;
+    size_t len = _len + startMargin + endMargin;
+
+    if (static_cast<size_t>(p) < len)
+        return _p;
+
+    // constant
+    p = -1;
+
+    return p;
 }
 
 void BlurNeon5x5(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, int width)
@@ -60,16 +74,27 @@ void BlurNeon5x5(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int heigh
     uint8_t* uSrc = reinterpret_cast<uint8_t*>(src.data());
     uint8_t* uDst = reinterpret_cast<uint8_t*>(dst.data());
 
+    uint8_t borderValue = 0;
+    int cn = 1;
+
+    float32x4_t v1_25 = vdupq_n_f32(1.0f/25.0f);
+    float32x4_t v0_5  = vdupq_n_f32(.5f);
+
+    // border use zero
     std::vector<uint8_t> _tmp;
-    _tmp.assign(width + 2, 0);
-    tmp = &_tmp[1];
+    uint8_t* tmp = 0;
+    // constant
+    {
+        _tmp.assign(width + 2, borderValue);
+        tmp = &_tmp[cn];
+    }
 
     uint16x8_t tPrev = vdupq_n_u16(0x0);   // duplicate scalar or vector to vector
     uint16x8_t tCurr = tPrev;
     uint16x8_t tNext = tPrev;
     uint16x8_t t0, t1, t2, t3, t4;
 
-    for (size_t y = 0; y < size.height; ++y)
+    for (size_t y = 0; y < height; ++y)
     {
         const uint8_t *sRow0, *sRow1;
         const uint8_t* sRow2 = GetRowPtr(uSrc, srcStride, y);
@@ -77,18 +102,104 @@ void BlurNeon5x5(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int heigh
 
         uint8_t* dRow = GetRowPtr(uDst, dstStride, y);
 
-        sRow0 = y > 1 ? GetRowPtr(uSrc, srcStirde, y - 2) : tmp;
+        sRow0 = y > 1 ? GetRowPtr(uSrc, srcStride, y - 2) : tmp;
         sRow1 = y > 0 ? GetRowPtr(uSrc, srcStride, y - 1) : tmp;
         sRow3 = y < height - 1 ? GetRowPtr(uSrc, srcStride, y + 1) : tmp;
         sRow4 = y < height - 2 ? GetRowPtr(uSrc, srcStride, y + 2) : tmp;
 
         // do vertical convolution
-
         size_t       x     = 0;
         const size_t bCols = y + 3 < height ? width : (width - 8);
         for (; x <= bCols; x += 8)
         {
             uint8x8_t x0 = vld1_u8(sRow0 + x);
+            uint8x8_t x1 = vld1_u8(sRow1 + x);
+            uint8x8_t x2 = vld1_u8(sRow2 + x);
+            uint8x8_t x3 = vld1_u8(sRow3 + x);
+            uint8x8_t x4 = vld1_u8(sRow4 + x);
+
+            tPrev = tCurr;
+            tCurr = tNext;
+            tNext = vaddw_u8(vaddq_u16(vaddl_u8(x0, x1), vaddl_u8(x2, x3)), x4);
+
+            if (!x)
+            {
+                tCurr = vsetq_lane_u16(0, tCurr, 6);
+                tCurr = vsetq_lane_u16(0, tCurr, 7);
+            }
+
+            t0 = vextq_u16(tPrev, tCurr, 6);
+            t1 = vextq_u16(tPrev, tCurr, 7);
+            t2 = tCurr;
+            t3 = vextq_u16(tCurr, tNext, 1);
+            t4 = vextq_u16(tCurr, tNext, 2);
+
+            t0 = vqaddq_u16(vqaddq_u16(vqaddq_u16(t0, t1), vqaddq_u16(t2, t3)), t4);
+
+            uint32x4_t tres1 = vmovl_u16(vget_low_u16(t0));
+            uint32x4_t tres2 = vmovl_u16(vget_high_u16(t0));
+            float32x4_t vf1 = vmulq_f32(v1_25, vcvtq_f32_u32(tres1));
+            float32x4_t vf2 = vmulq_f32(v1_25, vcvtq_f32_u32(tres2));
+            tres1 = vcvtq_u32_f32(vaddq_f32(vf1, v0_5));
+            tres1 = vcvtq_u32_f32(vaddq_f32(vf2, v0_5));
+            t0 = vcombine_u16(vmovn_u32(tres1), vmovn_u32(tres2));
+            vst1_u8(dRow + x - 8, vmovn_u16(t0));
+        }
+
+        x -= 8;
+
+        if (x == width)
+        {
+            x -= cn;
+        }
+
+        int16_t pprevx[4], prevx[4], rowx[4], nextx[4], nnextx[4];
+        ptrdiff_t px = x / cn;
+
+        for (int32_t k = 0; k < cn; k++)
+        {
+            ptrdiff_t ploc;
+            ploc = borderInterpolate(px-2, width);
+            pprevx[k] = ploc < 0 ? 5 * borderValue :
+                                   sRow4[ploc*cn+k] + sRow3[ploc*cn+k] +
+                                   sRow2[ploc*cn+k] + sRow1[ploc*cn+k] +
+                                   sRow0[ploc*cn+k];
+
+            ploc = borderInterpolate(px-1, width);
+            prevx[k] = ploc < 0 ? 5 * borderValue :
+                                  sRow4[ploc*cn+k] + sRow3[ploc*cn+k] +
+                                  sRow2[ploc*cn+k] + sRow1[ploc*cn+k] +
+                                  sRow0[ploc*cn+k];
+            
+            rowx[k] = sRow4[ploc*cn+k] + sRow3[ploc*cn+k] + sRow2[ploc*cn+k]
+                        + sRow1[ploc*cn+k] + sRow0[ploc*cn+k];
+
+            ploc = borderInterpolate(px+1, width);
+            nextx[k] = ploc < 0 ? 5 * borderValue :
+                                  sRow4[ploc*cn+k] + sRow3[ploc*cn+k] +
+                                  sRow2[ploc*cn+k] + sRow1[ploc*cn+k] +
+                                  sRow0[ploc*cn+k];
+        }
+
+        x = px * cn;
+        for (; x < width; x+=cn, px++)
+        {
+            for (int32_t k = 0; k < cn; ++k)
+            {
+                ptrdiff_t ploc = borderInterpolate(px+2, width);
+                nnextx[k] = ploc < 0 ? 5 * borderValue :
+                                       sRow4[ploc*cn+k] + sRow3[ploc*cn+k] +
+                                       sRow2[ploc*cn+k] + sRow1[ploc*cn+k] +
+                                       sRow0[ploc*cn+k];
+
+                *(dRow+x+k) = static_cast<uint8_t>((pprevx[k] + prevx[k] +
+                    rowx[k] + nextx[k] +nnextx[k])*(1/25.));
+
+                pprevx[k] = prevx[k];
+                prevx[k]  = rowx[k];
+                rowx[k]   = nextx[k];
+                nextx[k]  = nnextx[k];
+            }
         }
     }
 }
@@ -144,7 +255,23 @@ int main()
         total_time += time;
     }
 
-    std::cout << "blur cost avg: " << total_time / LOOP << " min: " << min_time << std::endl;
+    std::cout << "RefBlur cost avg: " << total_time / LOOP << " min: " << min_time << std::endl;
+
+    min_time   = DBL_MAX;
+    total_time = 0;
+
+    for (int i = 0; i < LOOP; ++i)
+    {
+        Tic();
+        BlurNeon5x5(input, output, H, W);
+        double time = Toc();
+
+        if (time < min_time)
+            min_time = time;
+
+        total_time += time;
+    }
+    std::cout << "NeonBlur cost avg: " << total_time / LOOP << "min: " << min_time << std::endl;
 
     return 0;
 }

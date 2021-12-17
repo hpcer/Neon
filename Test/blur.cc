@@ -7,7 +7,26 @@
 #include <random>
 #include <vector>
 
-// typedef unsigned char uint8_t;
+void CheckResult(std::vector<uint8_t>& dst0, std::vector<uint8_t>& dst1, int height, int width)
+{
+    uint8_t max_diff = 0;
+    uint8_t diff_num = 0;
+    for (int h = 2; h < height - 2; ++h)
+    {
+        for (int w = 2; w < width - 2; ++w)
+        {
+            diff = abs(dst0[h * width + w] - dst[h * width + w]);
+            if (diff != 0)
+            {
+                diff_num++;
+                if (diff > max_diff)
+                    max_diff = diff;
+            }
+        }
+    }
+
+    std::cout << "max_diff: " << max_diff << " diff_num: " << diff_num << std::endl;
+}
 
 void BlurRef(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, int width, int kernel_size)
 {
@@ -170,7 +189,7 @@ void BlurNeon5x5(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int heigh
                                   sRow4[ploc*cn+k] + sRow3[ploc*cn+k] +
                                   sRow2[ploc*cn+k] + sRow1[ploc*cn+k] +
                                   sRow0[ploc*cn+k];
-            
+
             rowx[k] = sRow4[ploc*cn+k] + sRow3[ploc*cn+k] + sRow2[ploc*cn+k]
                         + sRow1[ploc*cn+k] + sRow0[ploc*cn+k];
 
@@ -272,6 +291,8 @@ int main()
         total_time += time;
     }
     std::cout << "NeonBlur cost avg: " << total_time / LOOP << "min: " << min_time << std::endl;
+
+    // check result;
 
     return 0;
 }

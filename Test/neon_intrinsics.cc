@@ -78,6 +78,16 @@ inline void M_vaddl_u8(std::vector<unsigned char>& arr)
         std::cout << std::endl;                         \
     }
 
+#define NeonPrintU8(a, n)                               \
+    {                                                   \
+        uint8_t x[n];                                   \
+        vst1q_u8(x, a);                                 \
+                                                        \
+        for (int i = 0; i < n; ++i)                     \
+            std::cout << static_cast<int>(x[i]) << " "; \
+        std::cout << std::endl;                         \
+    }
+
 inline void M_vaddq_u16(std::vector<unsigned short>& arr)
 {
     uchar*     ptr = reinterpret_cast<uchar*>(arr.data());
@@ -98,9 +108,45 @@ inline void M_vaddq_u16(std::vector<unsigned short>& arr)
     NeonPrintU16(c, 8);
 }
 
+inline void M_vsetq_lane_u16(std::vector<uint16_t>& arr)
+{
+    uint16_t* ptr = reinterpret_cast<uint16_t*>(arr.data());
+    uint16x8_t a;
+
+    a = vld1q_u16(ptr);
+
+    std::cout << "in0: " << std::endl;
+    NeonPrintU16(a, 8);
+    uint16x8_t c = vsetq_lane_u16(0, a, 6);
+    std::cout << "vsetq_lane_u16 index 6: " << std::endl;
+    NeonPrintU16(c, 8);
+}
+
+inline void M_vextq_u16(std::vector<uint16_t>& arr)
+{
+    uint16_t* ptr = reinterpret_cast<uint16_t*>(arr.data());
+    uint16x8_t a, b, c;
+
+    a = vld1q_u16(ptr);
+    b = vld1q_u16(ptr + 16);
+
+    std::cout << "in0: " << std::endl;
+    NeonPrintU16(a, 8);
+    std::cout << "in1: " << std::endl;
+    NeonPrintU16(b, 8);
+
+    c = vextq_u16(a, b, 6);
+    std::cout << "vextq_u16 index: 6" << std::endl;
+    NeonPrintU16(c, 8);
+
+    c = vextq_u16(a, b, 4);
+    std::cout << "vextq_u16 index: 4" << std::endl;
+    NeonPrintU16(c, 8);
+}
+
 int main()
 {
-    std::vector<uchar> arrForU8;
+    std::vector<uchar>          arrForU8;
     std::vector<unsigned short> arrForU16;
     InitArrRandom(arrForU8);
     InitArrRandom(arrForU16);
@@ -108,6 +154,10 @@ int main()
     M_vaddl_u8(arrForU8);
 
     M_vaddq_u16(arrForU16);
+
+    M_vsetq_lane_u16(arrForU16);
+
+    M_vextq_u16(arrForU16);
 
     return 0;
 }

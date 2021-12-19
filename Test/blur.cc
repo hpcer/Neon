@@ -13,13 +13,8 @@ void CheckResult(std::vector<uint8_t>& dst0, std::vector<uint8_t>& dst1, int hei
     int32_t diff_num = 0;
     for (int h = 0; h < height; ++h)
     {
-        // if (h > 2)
-        //     continue;
         for (int w = 0; w < width; ++w)
         {
-            // if(w > 16)
-            //     continue;
-
             uint8_t diff = abs(dst0[h * width + w] - dst1[h * width + w]);
             if (diff != 0)
             {
@@ -27,8 +22,8 @@ void CheckResult(std::vector<uint8_t>& dst0, std::vector<uint8_t>& dst1, int hei
                 if (diff > max_diff)
                     max_diff = diff;
             }
-            std::cout << "(" << h << ", " << w << "): " << static_cast<int>(dst0[h * width + w]) << " "
-                      << static_cast<int>(dst1[h * width + w]) << std::endl;
+            // std::cout << "(" << h << ", " << w << "): " << static_cast<int>(dst0[h * width + w]) << " "
+            //           << static_cast<int>(dst1[h * width + w]) << " ---> " << static_cast<int>(diff) << std::endl;
         }
     }
 
@@ -37,8 +32,8 @@ void CheckResult(std::vector<uint8_t>& dst0, std::vector<uint8_t>& dst1, int hei
 
 void BlurRef(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, int width, int kernel_size)
 {
-    int   half_k = kernel_size / 2;
-    int   count;
+    int      half_k = kernel_size / 2;
+    int      count;
     uint16_t temp;
 
     if (dst.size() < height * width)
@@ -65,7 +60,7 @@ void BlurRef(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, i
                     ++count;
                 }
             }
-            dst_ptr[h * width + w] = static_cast<uint8_t>(temp * (1.f / count) + 0.5f);
+            dst_ptr[h * width + w] = static_cast<uint8_t>(temp * (1.f / count));
         }
     }
     return;
@@ -310,6 +305,17 @@ void BlurNeon5x5New(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int he
         // do vertical convolution
         size_t       x     = 0;
         const size_t bCols = width;
+
+        float32x4_t vScale = v1_25;
+
+        // only 0 1 2 ( 3x5 )
+        if (y == 0 || y == height - 1)
+            vScale = vdupq_n_f32(1.0f / 15.0f);
+
+        // only 0 1 2 3 (4x5)
+        if (y == 1 || y == height - 2)
+            vScale = vdupq_n_f32(1.0f / 20.f);
+
         for (; x <= bCols; x += 8)
         {
             uint8x8_t x0 = vld1_u8(sRow0 + x);
@@ -340,13 +346,34 @@ void BlurNeon5x5New(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int he
 
             t0 = vqaddq_u16(vqaddq_u16(vqaddq_u16(t0, t1), vqaddq_u16(t2, t3)), t4);
 
-            uint32x4_t  tres1 = vmovl_u16(vget_low_u16(t0));
-            uint32x4_t  tres2 = vmovl_u16(vget_high_u16(t0));
-            float32x4_t vf1   = vmulq_f32(v1_25, vcvtq_f32_u32(tres1));
-            float32x4_t vf2   = vmulq_f32(v1_25, vcvtq_f32_u32(tres2));
-            tres1             = vcvtq_u32_f32(vaddq_f32(vf1, v0_5));
-            tres2             = vcvtq_u32_f32(vaddq_f32(vf2, v0_5));
-            t0                = vcombine_u16(vmovn_u32(tres1), vmovn_u32(tres2));
+            uint32x4_t tres1 = vmovl_u16(vget_low_u16(t0));
+            uint32x4_t tres2 = vmovl_u16(vget_high_u16(t0));
+
+            float32x4_t scale0 = vScale;
+            float32x4_t scale1 = vScale;
+            if (x == 8)
+            {
+                scale0 = vsetq_lane_f32(1.0f / 15.0f, scale0, 0);
+                scale0 = vsetq_lane_f32(1.0f / 20.0f, scale0, 1);
+
+                if (y == 0 || y == height - 1)
+                {
+                    scale0 = vsetq_lane_f32(1.0f / 9.0f, scale0, 0);
+                    scale0 = vsetq_lane_f32(1.0f / 12.0f, scale0, 1);
+                }
+
+                if (y == 1 || y == height - 2)
+                {
+                    scale0 = vsetq_lane_f32(1.0f / 12.0f, scale0, 0);
+                    scale0 = vsetq_lane_f32(1.0f / 16.0f, scale0, 1);
+                }
+            }
+
+            float32x4_t vf1 = vmulq_f32(scale0, vcvtq_f32_u32(tres1));
+            float32x4_t vf2 = vmulq_f32(scale1, vcvtq_f32_u32(tres2));
+            tres1           = vcvtq_u32_f32(vaddq_f32(vf1, v0_5));
+            tres2           = vcvtq_u32_f32(vaddq_f32(vf2, v0_5));
+            t0              = vcombine_u16(vmovn_u32(tres1), vmovn_u32(tres2));
             vst1_u8(dRow + x - 8, vmovn_u16(t0));
         }
 
@@ -354,7 +381,7 @@ void BlurNeon5x5New(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int he
 
         // if (x == width)
         // {
-            x -= 2;
+        x -= 2;
         // }
 
         int16_t   pprevx, prevx, rowx, nextx, nnextx;
@@ -373,12 +400,195 @@ void BlurNeon5x5New(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int he
         nextx = ploc < 0 ? 5 * borderValue : sRow4[ploc] + sRow3[ploc] + sRow2[ploc] + sRow1[ploc] + sRow0[ploc];
 
         x = px;
+
+        uint16_t count;
         for (; x < width; x++, px++)
         {
             ptrdiff_t ploc = borderInterpolate(px + 2, width);
             nnextx = ploc < 0 ? 5 * borderValue : sRow4[ploc] + sRow3[ploc] + sRow2[ploc] + sRow1[ploc] + sRow0[ploc];
 
-            *(dRow + x) = static_cast<uint8_t>(static_cast<float>(pprevx + prevx + rowx + nextx + nnextx) * (1 / 25.) + 0.5f);
+            count = (width - x) + (5 / 2);
+
+            if (y == 0 || y == height - 1)
+                count *= 3;
+            else if (y == 1 || y == height - 2)
+                count *= 4;
+            else
+                count *= 5;
+
+            *(dRow + x) = static_cast<uint8_t>(
+                static_cast<float>(pprevx + prevx + rowx + nextx + nnextx) * (1.0f / count) + 0.5f);
+
+            pprevx = prevx;
+            prevx  = rowx;
+            rowx   = nextx;
+            nextx  = nnextx;
+        }
+    }
+}
+
+
+void BlurNeon5x5Final(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, int width)
+{
+    size_t srcStride = width;
+    size_t dstStride = width;
+
+    uint8_t* uSrc = reinterpret_cast<uint8_t*>(src.data());
+    uint8_t* uDst = reinterpret_cast<uint8_t*>(dst.data());
+
+    uint8_t borderValue = 0;
+    int     cn          = 1;
+
+    // float32x4_t v1_25 = vdupq_n_f32(1.0f / 25.0f);
+    float32x4_t v0_5 = vdupq_n_f32(.5f);
+
+    // float32_t fScale[] = {1.0f/9.0f, 1.0f / 12.0f, 1.0f / 15.0f, 1.0f / 16.0f, 1.0f / 20.0f, 1.0f / 25.0f };
+
+    float32_t fScale[] = {0.0f, 1.0f, 1.0f / 2.0f, 1.0f / 3.0f, 1.0f / 4.0f, 1.0f / 5.0f,
+                          1.0f / 6.0f, 1.0f / 7.0f, 1.0f / 8.0f, 1.0f / 9.0f, 1.0f / 10.0f,
+                          1.0f / 11.0f, 1.0f / 12.0f, 1.0f / 13.0f, 1.0f / 14.0f, 1.0f / 15.0f,
+                          1.0f / 16.0f, 1.0f / 17.0f, 1.0f / 18.0f, 1.0f / 19.0f, 1.0f / 20.0f,
+                          1.0f / 21.0f, 1.0f / 22.0f, 1.0f / 23.0f, 1.0f / 24.0f, 1.0f / 25.0f};
+
+    // border use zero
+    std::vector<uint8_t> _tmp;
+    uint8_t*             tmp = 0;
+    // constant
+    {
+        _tmp.assign(width + 2, borderValue);
+        tmp = &_tmp[cn];
+    }
+
+    uint16x8_t tPrev = vdupq_n_u16(0x0);   // duplicate scalar or vector to vector
+    uint16x8_t tCurr = tPrev;
+    uint16x8_t tNext = tPrev;
+    uint16x8_t t0, t1, t2, t3, t4;
+
+    for (size_t y = 0; y < height; ++y)
+    {
+        const uint8_t *sRow0, *sRow1;
+        const uint8_t* sRow2 = GetRowPtr(uSrc, srcStride, y);
+        const uint8_t *sRow3, *sRow4;
+
+        uint8_t* dRow = GetRowPtr(uDst, dstStride, y);
+
+        sRow0 = y > 1 ? GetRowPtr(uSrc, srcStride, y - 2) : tmp;
+        sRow1 = y > 0 ? GetRowPtr(uSrc, srcStride, y - 1) : tmp;
+        sRow3 = y < height - 1 ? GetRowPtr(uSrc, srcStride, y + 1) : tmp;
+        sRow4 = y < height - 2 ? GetRowPtr(uSrc, srcStride, y + 2) : tmp;
+
+        // do vertical convolution
+        size_t       x     = 0;
+        const size_t bCols = width;
+
+        float32x4_t vScale = vdupq_n_f32(fScale[25]);
+
+        // only 0 1 2 ( 3x5 )
+        if (y == 0 || y == height - 1)
+            vScale = vdupq_n_f32(fScale[15]);
+
+        // only 0 1 2 3 (4x5)
+        if (y == 1 || y == height - 2)
+            vScale = vdupq_n_f32(fScale[20]);
+
+        for (; x <= bCols; x += 8)
+        {
+            uint8x8_t x0 = vld1_u8(sRow0 + x);
+            uint8x8_t x1 = vld1_u8(sRow1 + x);
+            uint8x8_t x2 = vld1_u8(sRow2 + x);
+            uint8x8_t x3 = vld1_u8(sRow3 + x);
+            uint8x8_t x4 = vld1_u8(sRow4 + x);
+
+            tPrev = tCurr;
+            tCurr = tNext;
+            tNext = vaddw_u8(vaddq_u16(vaddl_u8(x0, x1), vaddl_u8(x2, x3)), x4);
+
+            if (!x)
+            {
+                tCurr = tNext;
+
+                tCurr = vsetq_lane_u16(0, tCurr, 6);
+                tCurr = vsetq_lane_u16(0, tCurr, 7);
+
+                continue;
+            }
+
+            t0 = vextq_u16(tPrev, tCurr, 6);
+            t1 = vextq_u16(tPrev, tCurr, 7);
+            t2 = tCurr;
+            t3 = vextq_u16(tCurr, tNext, 1);
+            t4 = vextq_u16(tCurr, tNext, 2);
+
+            t0 = vqaddq_u16(vqaddq_u16(vqaddq_u16(t0, t1), vqaddq_u16(t2, t3)), t4);
+
+            uint32x4_t tres1 = vmovl_u16(vget_low_u16(t0));
+            uint32x4_t tres2 = vmovl_u16(vget_high_u16(t0));
+
+            float32x4_t scale0 = vScale;
+            float32x4_t scale1 = vScale;
+            if (x == 8)
+            {
+                scale0 = vsetq_lane_f32(fScale[15], scale0, 0);
+                scale0 = vsetq_lane_f32(fScale[20], scale0, 1);
+
+                if (y == 0 || y == height - 1)
+                {
+                    scale0 = vsetq_lane_f32(fScale[9], scale0, 0);
+                    scale0 = vsetq_lane_f32(fScale[12], scale0, 1);
+                }
+
+                if (y == 1 || y == height - 2)
+                {
+                    scale0 = vsetq_lane_f32(fScale[12], scale0, 0);
+                    scale0 = vsetq_lane_f32(fScale[16], scale0, 1);
+                }
+            }
+
+            float32x4_t vf1 = vmulq_f32(scale0, vcvtq_f32_u32(tres1));
+            float32x4_t vf2 = vmulq_f32(scale1, vcvtq_f32_u32(tres2));
+            tres1           = vcvtq_u32_f32(vf1);
+            tres2           = vcvtq_u32_f32(vf2);
+            t0              = vcombine_u16(vmovn_u32(tres1), vmovn_u32(tres2));
+            vst1_u8(dRow + x - 8, vmovn_u16(t0));
+        }
+
+        x -= 8;
+        x -= 2;
+
+        int16_t   pprevx, prevx, rowx, nextx, nnextx;
+        ptrdiff_t px = x;
+
+        ptrdiff_t ploc;
+        ploc   = borderInterpolate(px - 2, width);
+        pprevx = ploc < 0 ? 5 * borderValue : sRow4[ploc] + sRow3[ploc] + sRow2[ploc] + sRow1[ploc] + sRow0[ploc];
+
+        ploc  = borderInterpolate(px - 1, width);
+        prevx = ploc < 0 ? 5 * borderValue : sRow4[ploc] + sRow3[ploc] + sRow2[ploc] + sRow1[ploc] + sRow0[ploc];
+
+        rowx = sRow4[px] + sRow3[px] + sRow2[px] + sRow1[px] + sRow0[px];
+
+        ploc  = borderInterpolate(px + 1, width);
+        nextx = ploc < 0 ? 5 * borderValue : sRow4[ploc] + sRow3[ploc] + sRow2[ploc] + sRow1[ploc] + sRow0[ploc];
+
+        x = px;
+
+        uint16_t count;
+        for (; x < width; x++, px++)
+        {
+            ptrdiff_t ploc = borderInterpolate(px + 2, width);
+            nnextx = ploc < 0 ? 5 * borderValue : sRow4[ploc] + sRow3[ploc] + sRow2[ploc] + sRow1[ploc] + sRow0[ploc];
+
+            count = (width - x) + (5 / 2);
+
+            if (y == 0 || y == height - 1)
+                count *= 3;
+            else if (y == 1 || y == height - 2)
+                count *= 4;
+            else
+                count *= 5;
+
+            *(dRow + x) = static_cast<uint8_t>(
+                static_cast<float>(pprevx + prevx + rowx + nextx + nnextx) * fScale[count]);
 
             pprevx = prevx;
             prevx  = rowx;
@@ -451,7 +661,7 @@ int main()
     for (int i = 0; i < LOOP; ++i)
     {
         Tic();
-        BlurNeon5x5New(in, ot, H, W);
+        BlurNeon5x5Final(in, ot, H, W);
         double time = Toc();
 
         if (time < min_time)
@@ -459,7 +669,7 @@ int main()
 
         total_time += time;
     }
-    std::cout << "NeonBlur cost avg: " << total_time / LOOP << "min: " << min_time << std::endl;
+    std::cout << "NeonBlur cost avg: " << total_time / LOOP << " min: " << min_time << std::endl;
 
     // check result;
     std::cout << "check input:" << std::endl;

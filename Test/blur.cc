@@ -598,6 +598,181 @@ void BlurNeon5x5Final(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int 
     }
 }
 
+void thMaskNeon(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, int width, float bg, float fg)
+{
+    uint8_t* src_ptr = static_cast<uint8_t*>(src.data());
+    uint8_t* dst_ptr = static_cast<uint8_t*>(dst.data());
+
+    int size = height * width;
+
+    int k = 0;
+
+    // fg < bg
+    if (fg <= bg)
+    {
+        uint8_t scale = fg * 255 + 1;
+        uint8x16_t vscale = vdupq_n_u8(scale);
+
+        uint8x16_t res;
+
+        for (k = 0; k < size; k += 16)
+        {
+            uint8x16_t val;
+            val = vld1q_u8(src_ptr + k);
+
+            // >= 
+            res = vcgeq_u8(val, vscale);
+
+            vst1q_u8(dst_ptr + k, res);
+        }
+
+        k -= 16;
+
+        for (; k < size; k++)
+        {
+            uint8_t val = src_ptr[k];
+            if (val > scale)
+            {
+                dst_ptr[k] = 255;
+            }
+            else
+            {
+                dst_ptr[k] = 0;
+            }
+        }
+    }
+    else
+    {
+        float32_t v1_fg_bg = 1 / (fg - bg);
+        float32_t v1_255 = 1.0f / 255.0f;
+        float32_t v_bg = -bg;
+
+        for (k = 0; k < size; k += 16)
+        {
+            uint8x16_t val;
+            val = vld1q_u8(src_ptr + k);
+
+            uint16x8_t v0 = vmovl_u8(vget_low_u8(val));
+            uint16x8_t v1 = vmovl_u8(vget_high_u8(val));
+
+            uint32x4_t t0 = vmovl_u16(vget_low_u16(v0));
+            uint32x4_t t1 = vmovl_u16(vget_high_u16(v0));
+            uint32x4_t t2 = vmovl_u16(vget_low_u16(v1));
+            uint32x4_t t3 = vmovl_u16(vget_high_u16(v1));
+
+            // div 255.0
+            float32x4_t r0 = vmulq_f32(vdupq_n_f32(v1_255), vcvtq_f32_u32(t0));
+            float32x4_t r1 = vmulq_f32(vdupq_n_f32(v1_255), vcvtq_f32_u32(t1));
+            float32x4_t r2 = vmulq_f32(vdupq_n_f32(v1_255), vcvtq_f32_u32(t2));
+            float32x4_t r3 = vmulq_f32(vdupq_n_f32(v1_255), vcvtq_f32_u32(t3));
+
+            // sub bg
+            r0 = vaddq_f32(vdupq_n_f32(v_bg), r0);
+            r1 = vaddq_f32(vdupq_n_f32(v_bg), r1);
+            r2 = vaddq_f32(vdupq_n_f32(v_bg), r2);
+            r3 = vaddq_f32(vdupq_n_f32(v_bg), r3);
+
+            // div (fg - bg)
+            r0 = vmulq_f32(vdupq_n_f32(v1_fg_bg), r0);
+            r1 = vmulq_f32(vdupq_n_f32(v1_fg_bg), r1);
+            r2 = vmulq_f32(vdupq_n_f32(v1_fg_bg), r2);
+            r3 = vmulq_f32(vdupq_n_f32(v1_fg_bg), r3);
+
+            r0 = vminq_f32(r0, vdupq_n_f32(1.0f));
+            r1 = vminq_f32(r1, vdupq_n_f32(1.0f));
+            r2 = vminq_f32(r2, vdupq_n_f32(1.0f));
+            r3 = vminq_f32(r3, vdupq_n_f32(1.0f));
+
+            r0 = vmaxq_f32(r0, vdupq_n_f32(0.0f));
+            r1 = vmaxq_f32(r1, vdupq_n_f32(0.0f));
+            r2 = vmaxq_f32(r2, vdupq_n_f32(0.0f));
+            r3 = vmaxq_f32(r3, vdupq_n_f32(0.0f));
+
+            r0 = vfmaq_f32(vdupq_n_f32(0.5f), vdupq_n_f32(255.0f), r0);
+            r1 = vfmaq_f32(vdupq_n_f32(0.5f), vdupq_n_f32(255.0f), r1);
+            r2 = vfmaq_f32(vdupq_n_f32(0.5f), vdupq_n_f32(255.0f), r2);
+            r3 = vfmaq_f32(vdupq_n_f32(0.5f), vdupq_n_f32(255.0f), r3);
+
+            // cvt to u32
+            t0 = vcvtq_u32_f32(r0);
+            t1 = vcvtq_u32_f32(r1);
+            t2 = vcvtq_u32_f32(r2);
+            t3 = vcvtq_u32_f32(r3);
+
+            // cvt to uint16
+            v0 = vcombine_u16(vqmovn_u32(t0), vqmovn_u32(t1));
+            v1 = vcombine_u16(vqmovn_u32(t2), vqmovn_u32(t3));
+
+            // cvt to u8
+            val = vcombine_u8(vqmovn_u16(v0), vqmovn_u16(v1));
+
+            vst1q_u8(dst_ptr + k, val);
+        }
+
+        k -= 16;
+
+        for (; k < size; ++k)
+        {
+            float temp = (src_ptr[k] * v1_255 - bg) * v1_fg_bg;
+            if (temp > 1.0)
+            {
+                temp = 255.0;
+            }
+            else if (temp < 0.0)
+            {
+                temp = 0.0;
+            }
+            else
+            {
+                temp = temp * 255;
+            }
+
+            dst_ptr[k] = static_cast<unsigned char>(temp + 0.5);
+        }
+    }
+}
+
+void thMaskRef(std::vector<uint8_t>& src, std::vector<uint8_t>& dst, int height, int width, float bg, float fg){
+    uint8_t* src_ptr = static_cast<uint8_t*>(src.data());
+    uint8_t* dst_ptr = static_cast<uint8_t*>(dst.data());
+    float temp;
+
+    float scale_255 = 1.0f / 255.0f;
+    float s_fg_bg = 1.0f / (fg - bg);
+
+    for (int r = 0; r < height * width; r++)
+    {
+        if (fg <= bg)
+        {
+            if (src_ptr[r] > fg * 255.0f)
+            {
+                temp = 255;
+            }
+            else
+            {
+                temp = 0;
+            }
+        }
+        else
+        {  // fg > bg
+            temp = (src_ptr[r] * scale_255 - bg) * s_fg_bg;
+            if (temp > 1.0f)
+            {
+                temp = 255.0f;
+            }
+            else if (temp < 0.0f)
+            {
+                temp = 0.0f;
+            }
+            else
+            {
+                temp = temp * 255;
+            }
+        }
+        dst_ptr[r] = static_cast<unsigned char>(temp + 0.5);
+    }
+}
+
 template<typename T, typename D>
 void CreateRandom(std::vector<T>& in, D distribution)
 {
@@ -672,10 +847,27 @@ int main()
     std::cout << "NeonBlur cost avg: " << total_time / LOOP << " min: " << min_time << std::endl;
 
     // check result;
-    std::cout << "check input:" << std::endl;
-    CheckResult(input, in, H, W);
+    // std::cout << "check input:" << std::endl;
+    // CheckResult(input, in, H, W);
 
-    std::cout << "check output:" << std::endl;
-    CheckResult(output, ot, H, W);
+    // std::cout << "check output:" << std::endl;
+    // CheckResult(output, ot, H, W);
+
+    // compute th_mask
+    std::vector<uint8_t>thRefOut(H * W);
+    std::vector<uint8_t>thNeonOt(H * W);
+
+    Tic();
+    thMaskRef(output, thRefOut, H, W, 0.8, 0.4);
+    double itime = Toc();
+    std::cout << "thRefMask cost: " << itime << " us" << std::endl;
+
+    Tic();
+    thMaskNeon(output, thNeonOt, H, W, 0.8, 0.4);
+    double otime = Toc();
+    std::cout << "NeonMask cost: " << otime << " us" << std::endl;
+
+    // checkout result;
+    CheckResult(thRefOut, thNeonOt, H, W);
     return 0;
 }
